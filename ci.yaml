@@ -1,0 +1,92 @@
+name: product-catalog
+on: 
+  push:
+    branches:
+      - main
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up golang v1.16
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.16'
+
+    - name: Build
+      run: |
+        cd src/productcatalogservice
+        go mod download
+        go build -o /productcatalogservice .
+    
+    - name: Unit Test
+      run: |
+        cd src/productcatalogservice
+        go test ./... -v
+  
+  Code-quality:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up golang v1.16
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.16'
+
+    - name: Install golangci-lint
+      run: |
+        curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.42.1
+
+    - name: Run golangci-lint
+      run: |
+        cd src/productcatalogservice
+        golangci-lint run ./...
+  
+  Docker:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Install Docker
+      uses: docker/setup-buildx-action@v2
+
+    - name: Login to DockerHub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+    
+    - name: Build and Push Docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: src/productcatalogservice
+        push: true
+        tags: ${{ secrets.DOCKER_USERNAME }}/product-catalog: ${{ github.run_id }}
+  
+  Update Kubernetes:
+    runs-on: ubuntu-latest
+    needs: Docker
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Update tag in kubernetes manifests file in deployment.yaml
+      run: |
+        sed -i 's|image: .*|image: '"${{ secrets.DOCKER_USERNAME }}"'/product-catalog:'"${{ github.run_id }}"'|g' ad/deploy.yaml
+    
+    - name: Commit changes
+      run: |
+        git config --global user.name 'github-actions'
+        git config --global user.email 'github-actions@github.com'  
+        git add ad/deploy.yaml
+        git commit -m 'Update image tag in deployment.yaml' 
+        git push origin main
+    
